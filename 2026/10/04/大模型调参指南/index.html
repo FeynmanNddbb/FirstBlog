@@ -1,0 +1,561 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>A3+Qwen3.8+vllm调参指南 | 发现问题，解决问题</title><meta name="author" content="feynman"><meta name="copyright" content="feynman"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="面向昇腾 A3、vLLM-Ascend 和 Qwen3.8-27B-W8A8，梳理 TTFT、TPOT、ITL、吞吐量、并发和显存指标与启动参数之间的关系。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="A3+Qwen3.8+vllm调参指南">
+<meta property="og:url" content="https://blog.lovecode.xin/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/index.html">
+<meta property="og:site_name" content="发现问题，解决问题">
+<meta property="og:description" content="面向昇腾 A3、vLLM-Ascend 和 Qwen3.8-27B-W8A8，梳理 TTFT、TPOT、ITL、吞吐量、并发和显存指标与启动参数之间的关系。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://blog.lovecode.xin/img/aiguo.jpeg">
+<meta property="article:published_time" content="2026-10-04T02:00:00.000Z">
+<meta property="article:modified_time" content="2026-10-04T13:54:09.541Z">
+<meta property="article:author" content="feynman">
+<meta property="article:tag" content="vLLM">
+<meta property="article:tag" content="大模型推理">
+<meta property="article:tag" content="昇腾">
+<meta property="article:tag" content="性能优化">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://blog.lovecode.xin/img/aiguo.jpeg"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "A3+Qwen3.8+vllm调参指南",
+  "url": "https://blog.lovecode.xin/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/",
+  "image": "https://blog.lovecode.xin/img/aiguo.jpeg",
+  "datePublished": "2026-10-04T02:00:00.000Z",
+  "dateModified": "2026-10-04T13:54:09.541Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "feynman",
+      "url": "https://blog.lovecode.xin"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://blog.lovecode.xin/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!true && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: {"path":"/search.xml","preload":false,"top_n_per_article":1,"unescape":false,"languages":{"hits_empty":"未找到符合您查询的内容：${query}","hits_stats":"共找到 ${hits} 篇文章"}},
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":true},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: {"limitCount":50,"languages":{"author":"作者: feynman","link":"链接: ","source":"来源: 发现问题，解决问题","info":"著作权归作者所有。商业转载请联系作者获得授权，非商业转载请注明出处。"}},
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: 'A3+Qwen3.8+vllm调参指南',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/custom.css"><div class="aplayer aplayer-fixed" data-id="18446707288" data-autoplay="true" data-server="netease" data-type="playlist" data-fixed="true" data-theme="#49b1f5" data-order="random"></div><meta name="generator" content="Hexo 7.3.0"></head><body><div id="web_bg" style="background-image: url(/./img/bg2.jpg);"></div><div id="sidebar"><div id="menu-mask"></div><div id="sidebar-menus"><div class="avatar-img text-center"><img src="/./img/touxiang.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="site-data text-center"><a href="/archives/"><div class="headline">文章</div><div class="length-num">39</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">58</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">9</div></a></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><a class="site-page" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 时间轴</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-list"></i><span> 链接</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 友情链接</span></a></li><li><a class="site-page child" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></li></ul></div></div></div></div><div class="post" id="body-wrap"><header class="post-bg" id="page-header" style="background-image: url(/./img/aiguo.jpeg);"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">发现问题，解决问题</span></a><a class="nav-page-title" href="/"><span class="site-name">A3+Qwen3.8+vllm调参指南</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"><div id="search-button"><span class="site-page social-icon search"><i class="fas fa-search fa-fw"></i><span> 搜索</span></span></div><div class="menus_items"><div class="menus_item"><a class="site-page" href="/"><i class="fa-fw fas fa-home"></i><span> 主页</span></a></div><div class="menus_item"><a class="site-page" href="/music/"><i class="fa-fw fas fa-music"></i><span> 音乐</span></a></div><div class="menus_item"><a class="site-page" href="/archives/"><i class="fa-fw fas fa-archive"></i><span> 时间轴</span></a></div><div class="menus_item"><a class="site-page" href="/tags/"><i class="fa-fw fas fa-tags"></i><span> 标签</span></a></div><div class="menus_item"><span class="site-page group"><i class="fa-fw fas fa-list"></i><span> 链接</span><i class="fas fa-chevron-down"></i></span><ul class="menus_item_child"><li><a class="site-page child" href="/link/"><i class="fa-fw fas fa-link"></i><span> 友情链接</span></a></li><li><a class="site-page child" href="/about/"><i class="fa-fw fas fa-heart"></i><span> 关于</span></a></li></ul></div></div><div id="toggle-menu"><span class="site-page"><i class="fas fa-bars fa-fw"></i></span></div></div></nav><div id="post-info"><h1 class="post-title">A3+Qwen3.8+vllm调参指南</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-10-04T02:00:00.000Z" title="发表于 2026-10-04 10:00:00">2026-10-04</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-10-04T13:54:09.541Z" title="更新于 2026-10-04 21:54:09">2026-10-04</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E4%BA%BA%E5%B7%A5%E6%99%BA%E8%83%BD/">人工智能</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-wordcount"><i class="far fa-file-word fa-fw post-meta-icon"></i><span class="post-meta-label">总字数:</span><span class="word-count">2.3k</span><span class="post-meta-separator">|</span><i class="far fa-clock fa-fw post-meta-icon"></i><span class="post-meta-label">阅读时长:</span><span>7分钟</span></span><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div></header><main class="layout" id="content-inner"><div id="post"><article class="container post-content" id="article-container"><div id="post-outdate-notice" data="{&quot;limitDay&quot;:365,&quot;messagePrev&quot;:&quot;这篇文章创建于&quot;,&quot;messageNext&quot;:&quot;天前，请以最新文章为主.&quot;,&quot;postUpdate&quot;:&quot;2026-10-04 21:54:09&quot;}" hidden></div><p>在昇腾 A3 上使用 vLLM-Ascend 部署 Qwen3.8-27B-W8A8 时，性能调优不能只盯着一个“tokens&#x2F;s”。同一组启动参数，可能让首 Token 延迟更低，却让并发吞吐下降；也可能提高最大上下文长度，却因为 KV Cache 占满显存而频繁 OOM。</p>
+<p>更可靠的做法是先明确目标，再把指标映射到参数：<strong>TTFT 看 Prefill，TPOT 和 ITL 看 Decode，吞吐量看调度与并发，最大上下文和显存则看 KV Cache 预算。</strong></p>
+<p>本文以常见的 <code>vllm serve</code> 参数为主，给出一套适用于当前模型和硬件的调参框架。</p>
+<h2 id="一、先看懂推理指标"><a href="#一、先看懂推理指标" class="headerlink" title="一、先看懂推理指标"></a>一、先看懂推理指标</h2><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>含义</th>
+<th>主要影响参数</th>
+<th>优化方向</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>TTFT</td>
+<td>从请求到第一个 Token 的时间</td>
+<td><code>max-num-batched-tokens</code>、<code>enable-chunked-prefill</code>、<code>max-num-seqs</code>、KV Cache 量化</td>
+<td>优化 Prefill，减少首 Token 等待</td>
+</tr>
+<tr>
+<td>TPOT</td>
+<td>生成阶段平均每个 Token 的时间</td>
+<td><code>max-num-seqs</code>、KV Cache dtype、Attention 算子、MTP</td>
+<td>优化 Decode，降低单 Token 延迟</td>
+</tr>
+<tr>
+<td>ITL</td>
+<td>相邻输出 Token 的时间间隔</td>
+<td><code>max-num-batched-tokens</code>、<code>max-num-seqs</code>、调度策略</td>
+<td>减少 Decode 抖动</td>
+</tr>
+<tr>
+<td>Output Throughput</td>
+<td>单位时间生成的 Token 数</td>
+<td><code>max-num-seqs</code>、<code>max-num-batched-tokens</code>、TP、MTP</td>
+<td>提高生成 Token 总量</td>
+</tr>
+<tr>
+<td>Request Throughput</td>
+<td>单位时间完成的请求数</td>
+<td><code>max-num-seqs</code>、输入长度、输出长度、调度策略</td>
+<td>提高请求完成效率</td>
+</tr>
+<tr>
+<td>最大上下文长度</td>
+<td>服务允许的最大输入和输出长度</td>
+<td><code>max-model-len</code>、KV Cache、<code>gpu-memory-utilization</code>、TP</td>
+<td>提高可承载上下文长度</td>
+</tr>
+<tr>
+<td>最大并发数</td>
+<td>同时运行的请求数量</td>
+<td><code>max-num-seqs</code>、KV Cache 占用、上下文长度</td>
+<td>提高并发承载能力</td>
+</tr>
+<tr>
+<td>显存占用</td>
+<td>权重、运行时和 KV Cache 的显存压力</td>
+<td><code>gpu-memory-utilization</code>、<code>max-model-len</code>、<code>max-num-seqs</code>、KV Cache dtype</td>
+<td>控制显存峰值</td>
+</tr>
+<tr>
+<td>Prefill 吞吐量</td>
+<td>单位时间处理的输入 Token 数</td>
+<td><code>max-num-batched-tokens</code>、Chunked Prefill、TP、Prefill 算子</td>
+<td>提高输入处理效率</td>
+</tr>
+<tr>
+<td>Decode 吞吐量</td>
+<td>单位时间生成的输出 Token 数</td>
+<td><code>max-num-seqs</code>、MTP、KV Cache、Attention 算子</td>
+<td>提高生成效率</td>
+</tr>
+<tr>
+<td>请求成功率</td>
+<td>请求成功完成的比例</td>
+<td><code>max-model-len</code>、<code>max-num-seqs</code>、显存预算、调度配置</td>
+<td>减少 OOM、超时和失败</td>
+</tr>
+</tbody></table>
+<p>这里的 TP 指 Tensor Parallel，即 <code>--tensor-parallel-size</code>。表中的参数只是主要调节方向，<strong>并不意味着参数越大，性能一定越好</strong>。</p>
+<h2 id="二、参数变化会带来什么影响"><a href="#二、参数变化会带来什么影响" class="headerlink" title="二、参数变化会带来什么影响"></a>二、参数变化会带来什么影响</h2><p>下面的箭头只表示常见趋势，最终结果仍然取决于硬件、模型、输入长度、输出长度和调度状态。</p>
+<ul>
+<li><code>↑</code>：参数增大后，指标可能增大。</li>
+<li><code>↓</code>：参数增大后，指标可能降低。</li>
+<li><code>△</code>：需要通过基准测试确认。</li>
+<li><code>—</code>：通常没有直接影响。</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>TTFT</th>
+<th>TPOT</th>
+<th>ITL</th>
+<th>输出吞吐</th>
+<th>最大上下文</th>
+<th>最大并发</th>
+<th>显存压力</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>max-model-len</code> ↑</td>
+<td>△</td>
+<td>△</td>
+<td>△</td>
+<td>△</td>
+<td>↑配置上限</td>
+<td>↓</td>
+<td>↑潜在需求</td>
+</tr>
+<tr>
+<td><code>max-num-seqs</code> ↑</td>
+<td>△</td>
+<td>△</td>
+<td>△</td>
+<td>↑或△</td>
+<td>—</td>
+<td>↑配置上限</td>
+<td>↑潜在需求</td>
+</tr>
+<tr>
+<td><code>max-num-batched-tokens</code> ↑</td>
+<td>↓或△</td>
+<td>↑或△</td>
+<td>↑或△</td>
+<td>↑或△</td>
+<td>—</td>
+<td>—</td>
+<td>↑或△</td>
+</tr>
+<tr>
+<td><code>gpu-memory-utilization</code> ↑</td>
+<td>△</td>
+<td>△</td>
+<td>△</td>
+<td>↑或△</td>
+<td>↑可用 KV 空间</td>
+<td>↑</td>
+<td>↑</td>
+</tr>
+<tr>
+<td><code>enable-chunked-prefill</code></td>
+<td>↓或△</td>
+<td>△</td>
+<td>△</td>
+<td>↑或△</td>
+<td>—</td>
+<td>△</td>
+<td>△</td>
+</tr>
+<tr>
+<td>KV Cache INT8&#x2F;FP8</td>
+<td>△</td>
+<td>↓或△</td>
+<td>↓或△</td>
+<td>↑或△</td>
+<td>↑</td>
+<td>↑</td>
+<td>↓</td>
+</tr>
+<tr>
+<td>Tensor Parallel ↑</td>
+<td>△</td>
+<td>↓或△</td>
+<td>↓或△</td>
+<td>↑或△</td>
+<td>↑或△</td>
+<td>△</td>
+<td>单卡压力下降，但通信开销增加</td>
+</tr>
+<tr>
+<td>MTP Decode</td>
+<td>—</td>
+<td>↓或△</td>
+<td>↓或△</td>
+<td>↑或△</td>
+<td>—</td>
+<td>△</td>
+<td>↑或△</td>
+</tr>
+<tr>
+<td>Prefix Caching</td>
+<td>重复前缀场景 ↓</td>
+<td>—</td>
+<td>—</td>
+<td>↑或△</td>
+<td>—</td>
+<td>△</td>
+<td>可能增加缓存占用</td>
+</tr>
+</tbody></table>
+<p>有两个容易被忽视的边界：</p>
+<ol>
+<li><code>max-model-len</code> 是配置上限，不代表服务一定能稳定承载这么长的请求；实际能力由 KV Cache 和显存共同决定。</li>
+<li><code>max-num-seqs</code> 是并发上限，不代表并发越高越快。并发增加后，调度等待、Decode 竞争和显存压力都可能上升。</li>
+</ol>
+<h2 id="三、按目标选择参数"><a href="#三、按目标选择参数" class="headerlink" title="三、按目标选择参数"></a>三、按目标选择参数</h2><h3 id="目标-A：降低-TTFT"><a href="#目标-A：降低-TTFT" class="headerlink" title="目标 A：降低 TTFT"></a>目标 A：降低 TTFT</h3><p>TTFT 主要由排队、输入处理、Prefill、KV Cache 生成或读取以及首 Token 返回组成。长上下文场景下，优先测试下面几项：</p>
+<table>
+<thead>
+<tr>
+<th align="right">优先级</th>
+<th>参数</th>
+<th>建议测试值</th>
+</tr>
+</thead>
+<tbody><tr>
+<td align="right">1</td>
+<td><code>max-num-batched-tokens</code></td>
+<td>2048 &#x2F; 4096 &#x2F; 8192</td>
+</tr>
+<tr>
+<td align="right">2</td>
+<td><code>enable-chunked-prefill</code></td>
+<td>开 &#x2F; 关，确认当前版本和长上下文支持情况</td>
+</tr>
+<tr>
+<td align="right">3</td>
+<td><code>max-num-seqs</code></td>
+<td>1 &#x2F; 2 &#x2F; 4</td>
+</tr>
+<tr>
+<td align="right">4</td>
+<td>KV Cache dtype</td>
+<td>默认值 &#x2F; FP8 &#x2F; INT8，以版本支持为准</td>
+</tr>
+</tbody></table>
+<p>对于 128K 单请求，建议先固定 <code>max-num-seqs=1</code>，只改变 <code>max-num-batched-tokens</code>，这样更容易判断 Prefill 调度预算的影响。若重复 Prompt 的 TTFT 异常下降，还要检查 Prefix Caching 是否命中，不能把缓存收益误认为算力提升。</p>
+<h3 id="目标-B：降低-TPOT-和-ITL"><a href="#目标-B：降低-TPOT-和-ITL" class="headerlink" title="目标 B：降低 TPOT 和 ITL"></a>目标 B：降低 TPOT 和 ITL</h3><p>TPOT 和 ITL 更接近 Decode 阶段的真实表现，建议按以下顺序排查：</p>
+<ol>
+<li><strong>KV Cache dtype</strong>：降低 KV Cache 的读写成本，但要确认精度和算子支持。</li>
+<li><strong>Attention Backend</strong>：选择适配当前 NPU、模型和 vLLM-Ascend 版本的高性能实现。</li>
+<li><strong>MTP Decode</strong>：通过多 Token 预测减少逐 Token 调用主模型的次数。</li>
+<li><strong><code>max-num-seqs</code></strong>：分别测试低并发和高并发，观察吞吐与延迟的拐点。</li>
+<li><strong>Tensor Parallel</strong>：平衡计算切分收益与卡间通信开销。</li>
+</ol>
+<p>如果 TPOT 变化不大，但 ITL 抖动明显，问题更可能出在调度、批次动态变化或并发竞争，而不是单个 Attention 算子。</p>
+<h3 id="目标-C：提高上下文长度和并发"><a href="#目标-C：提高上下文长度和并发" class="headerlink" title="目标 C：提高上下文长度和并发"></a>目标 C：提高上下文长度和并发</h3><p>这类目标本质上是在做显存预算，建议逐步增加参数，不要一次把所有上限拉满：</p>
+<ol>
+<li><code>max-model-len</code>：从实际业务长度开始逐步增加。</li>
+<li>KV Cache dtype：在版本支持且精度可接受时，使用更省显存的类型。</li>
+<li><code>gpu-memory-utilization</code>：提高可分配显存比例，但要为运行时和临时张量保留余量。</li>
+<li><code>max-num-seqs</code>：逐步增加并发，记录 OOM、排队时间和请求成功率。</li>
+<li><code>max-num-batched-tokens</code>：调节 Prefill 调度预算，观察长短请求之间的相互影响。</li>
+</ol>
+<p>这里的目标不是“让每个参数都最大”，而是在成功率、延迟、吞吐和显存峰值之间找到稳定工作点。</p>
+<h2 id="四、一套可复现的测试方法"><a href="#四、一套可复现的测试方法" class="headerlink" title="四、一套可复现的测试方法"></a>四、一套可复现的测试方法</h2><h3 id="1-先固定测试条件"><a href="#1-先固定测试条件" class="headerlink" title="1. 先固定测试条件"></a>1. 先固定测试条件</h3><p>每次测试至少记录以下信息：</p>
+<ul>
+<li>vLLM、vLLM-Ascend、驱动、固件和模型版本；</li>
+<li><code>tensor-parallel-size</code>、<code>max-model-len</code>、<code>max-num-seqs</code> 等启动参数；</li>
+<li>输入 Token 数、输出 Token 数和请求并发数；</li>
+<li>Prefix Caching、Chunked Prefill、MTP 和 KV Cache dtype 状态；</li>
+<li>首次运行、热身后运行和缓存命中运行的区别。</li>
+</ul>
+<h3 id="2-冷启动、热身和缓存命中分开测"><a href="#2-冷启动、热身和缓存命中分开测" class="headerlink" title="2. 冷启动、热身和缓存命中分开测"></a>2. 冷启动、热身和缓存命中分开测</h3><p>同一服务的第一次请求可能包含算子编译、图编译、运行时初始化、内存池分配和 Prefix Cache 建立。建议至少分成三组：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">冷启动：重启服务后直接测试</span><br><span class="line">热身后：先发送若干请求，再测试</span><br><span class="line">缓存命中：固定 Prompt，观察 Prefix Cache 命中后的表现</span><br></pre></td></tr></table></figure>
+
+<p>尤其是随机数据集，输入长度相同不等于输入前缀相同。若要验证 Prefix Caching，必须固定实际文本或 Token 序列，并查看服务日志或监控中的命中指标。</p>
+<h3 id="3-不要只看平均值"><a href="#3-不要只看平均值" class="headerlink" title="3. 不要只看平均值"></a>3. 不要只看平均值</h3><p>建议同时观察 P50、P95 和 P99 延迟，以及 TTFT、TPOT、ITL、Output Throughput、显存占用和请求成功率。单次运行可能受到设备频率、后台任务和动态调度影响，最好重复多次并报告中位数。</p>
+<h2 id="五、几个常见误区"><a href="#五、几个常见误区" class="headerlink" title="五、几个常见误区"></a>五、几个常见误区</h2><h3 id="误区一：max-num-seqs-越大越好"><a href="#误区一：max-num-seqs-越大越好" class="headerlink" title="误区一：max-num-seqs 越大越好"></a>误区一：<code>max-num-seqs</code> 越大越好</h3><p>它只能提高并发配置上限。并发增大后，KV Cache 占用和调度竞争也会增大，可能导致 TPOT、ITL 和请求成功率恶化。</p>
+<h3 id="误区二：gpu-memory-utilization-拉满最划算"><a href="#误区二：gpu-memory-utilization-拉满最划算" class="headerlink" title="误区二：gpu-memory-utilization 拉满最划算"></a>误区二：<code>gpu-memory-utilization</code> 拉满最划算</h3><p>更高的显存比例可以容纳更多 KV Cache，但也会压缩运行时、临时张量和通信缓冲区的空间。稳定服务需要留出余量，最终应以长时间压力测试结果为准。</p>
+<h3 id="误区三：第二次-Prefill-变快就是算力提升"><a href="#误区三：第二次-Prefill-变快就是算力提升" class="headerlink" title="误区三：第二次 Prefill 变快就是算力提升"></a>误区三：第二次 Prefill 变快就是算力提升</h3><p>如果第二次请求命中了 Prefix Caching，或者第一次运行完成了编译和内存预热，那么两次请求的实际工作量并不相同。只有在相同服务状态、相同输入和多轮重复测试下，Prefill 数据才具有可比性。</p>
+<h3 id="误区四：只看吞吐，不看成功率"><a href="#误区四：只看吞吐，不看成功率" class="headerlink" title="误区四：只看吞吐，不看成功率"></a>误区四：只看吞吐，不看成功率</h3><p>一个 OOM 频发的配置，即使短时间吞吐很高，也不是可用的生产配置。调优结果应同时满足延迟、吞吐、显存和请求成功率要求。</p>
+<h2 id="六、结论"><a href="#六、结论" class="headerlink" title="六、结论"></a>六、结论</h2><p>针对 A3 + vLLM-Ascend + Qwen3.8-27B-W8A8，可以按下面的思路建立调参顺序：</p>
+<ol>
+<li>用 <code>max-num-batched-tokens</code>、Chunked Prefill 和 Prefix Caching 分析 TTFT。</li>
+<li>用 KV Cache dtype、Attention Backend、MTP 和 <code>max-num-seqs</code> 优化 TPOT、ITL 与 Decode 吞吐。</li>
+<li>用 <code>max-model-len</code>、KV Cache、<code>gpu-memory-utilization</code> 和 TP 规划上下文长度与并发。</li>
+<li>用冷启动、热身后、缓存命中三类场景隔离首轮开销。</li>
+<li>用多轮测试和 P50&#x2F;P95&#x2F;P99 指标验证结果，而不是依据单次吞吐下结论。</li>
+</ol>
+<p>最终要优化的不是某个孤立参数，而是<strong>业务负载、调度策略、KV Cache、算子实现和显存预算组成的整体系统</strong>。参数越大并不等于性能越好，能够稳定完成请求的配置，才是真正有效的配置。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://blog.lovecode.xin">feynman</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://blog.lovecode.xin/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/">https://blog.lovecode.xin/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://blog.lovecode.xin" target="_blank">发现问题，解决问题</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/vLLM/">vLLM</a><a class="post-meta__tags" href="/tags/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E6%8E%A8%E7%90%86/">大模型推理</a><a class="post-meta__tags" href="/tags/%E6%98%87%E8%85%BE/">昇腾</a><a class="post-meta__tags" href="/tags/%E6%80%A7%E8%83%BD%E4%BC%98%E5%8C%96/">性能优化</a></div><div class="post-share"><div class="social-share" data-image="/./img/aiguo.jpeg" data-sites="facebook,twitter,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/10/03/%E4%B8%BA%E4%BB%80%E4%B9%88%E7%AC%AC%E4%BA%8C%E6%AC%A1%E6%B5%8B%E8%AF%95%E7%9A%84prefill%E6%95%88%E6%9E%9C%E5%A5%BD%E8%BF%99%E4%B9%88%E5%A4%9A%EF%BC%9F/" title="为什么第二次测试的prefill效果好这么多？"><img class="cover" src="/./img/aiguo.jpeg" onerror="onerror=null;src='/img/404.jpg'" alt="cover of next post"><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">为什么第二次测试的prefill效果好这么多？</div></div><div class="info-2"><div class="info-item-1">通过两组 Qwen3.8-27B-W8A8 在昇腾 A3 上的 Benchmark 数据，分析第二次测试 TTFT 大幅下降的原因，以及如何区分前缀缓存、算子编译和首轮运行时开销。</div></div></div></a></nav><div class="relatedPosts"><div class="headline"><i class="fas fa-thumbs-up fa-fw"></i><span>相关推荐</span></div><div class="relatedPosts-list"><a class="pagination-related" href="/2026/10/03/%E4%B8%BA%E4%BB%80%E4%B9%88%E7%AC%AC%E4%BA%8C%E6%AC%A1%E6%B5%8B%E8%AF%95%E7%9A%84prefill%E6%95%88%E6%9E%9C%E5%A5%BD%E8%BF%99%E4%B9%88%E5%A4%9A%EF%BC%9F/" title="为什么第二次测试的prefill效果好这么多？"><img class="cover" src="/./img/aiguo.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-10-03</div><div class="info-item-2">为什么第二次测试的prefill效果好这么多？</div></div><div class="info-2"><div class="info-item-1">通过两组 Qwen3.8-27B-W8A8 在昇腾 A3 上的 Benchmark 数据，分析第二次测试 TTFT 大幅下降的原因，以及如何区分前缀缓存、算子编译和首轮运行时开销。</div></div></div></a><a class="pagination-related" href="/2026/09/11/vllm%E9%87%8F%E5%8C%96%E6%A0%BC%E5%BC%8F%E4%BB%8B%E7%BB%8D/" title="vllm量化格式笔记"><img class="cover" src="/./img/aiguo.jpeg" alt="cover"><div class="info text-center"><div class="info-1"><div class="info-item-1"><i class="far fa-calendar-alt fa-fw"></i> 2026-09-11</div><div class="info-item-2">vllm量化格式笔记</div></div><div class="info-2"><div class="info-item-1">记录在RTX 4060 8GB上使用Qwen3.5 4B，通过INT4 权重、FP16激活和FP8 KV Cache 部署vLLM的个人实践配置与排障经验。</div></div></div></a></div></div><hr class="custom-hr"/><div id="post-comment"><div class="comment-head"><div class="comment-headline"><i class="fas fa-comments fa-fw"></i><span> 评论</span></div></div><div class="comment-wrap"><div><div id="twikoo-wrap"></div></div></div></div></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/./img/touxiang.jpg" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">feynman</div><div class="author-info-description">TryMyBest2Do</div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">39</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">58</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">9</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/FeynmanNddbb"><i class="fab fa-github"></i><span>关注我</span></a><div class="card-info-social-icons"><a class="social-icon" href="/img/weixin.jpg" target="_blank" title="微信"><i class="fab fa-weixin"></i></a><a class="social-icon" href="/img/qq.jpg" target="_blank" title="QQ"><i class="fab fa-qq"></i></a><a class="social-icon" href="/" target="_blank" title="blog"><i class="fa-brands fa-reddit"></i></a><a class="social-icon" href="mailto:3553303315@qq.com" target="_blank" title="邮箱"><i class="fas fa-envelope"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">建议反馈或商业合作请见上述联系方式↑</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%80%E3%80%81%E5%85%88%E7%9C%8B%E6%87%82%E6%8E%A8%E7%90%86%E6%8C%87%E6%A0%87"><span class="toc-text">一、先看懂推理指标</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%8C%E3%80%81%E5%8F%82%E6%95%B0%E5%8F%98%E5%8C%96%E4%BC%9A%E5%B8%A6%E6%9D%A5%E4%BB%80%E4%B9%88%E5%BD%B1%E5%93%8D"><span class="toc-text">二、参数变化会带来什么影响</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%B8%89%E3%80%81%E6%8C%89%E7%9B%AE%E6%A0%87%E9%80%89%E6%8B%A9%E5%8F%82%E6%95%B0"><span class="toc-text">三、按目标选择参数</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9B%AE%E6%A0%87-A%EF%BC%9A%E9%99%8D%E4%BD%8E-TTFT"><span class="toc-text">目标 A：降低 TTFT</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9B%AE%E6%A0%87-B%EF%BC%9A%E9%99%8D%E4%BD%8E-TPOT-%E5%92%8C-ITL"><span class="toc-text">目标 B：降低 TPOT 和 ITL</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E7%9B%AE%E6%A0%87-C%EF%BC%9A%E6%8F%90%E9%AB%98%E4%B8%8A%E4%B8%8B%E6%96%87%E9%95%BF%E5%BA%A6%E5%92%8C%E5%B9%B6%E5%8F%91"><span class="toc-text">目标 C：提高上下文长度和并发</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%9B%9B%E3%80%81%E4%B8%80%E5%A5%97%E5%8F%AF%E5%A4%8D%E7%8E%B0%E7%9A%84%E6%B5%8B%E8%AF%95%E6%96%B9%E6%B3%95"><span class="toc-text">四、一套可复现的测试方法</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-%E5%85%88%E5%9B%BA%E5%AE%9A%E6%B5%8B%E8%AF%95%E6%9D%A1%E4%BB%B6"><span class="toc-text">1. 先固定测试条件</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E5%86%B7%E5%90%AF%E5%8A%A8%E3%80%81%E7%83%AD%E8%BA%AB%E5%92%8C%E7%BC%93%E5%AD%98%E5%91%BD%E4%B8%AD%E5%88%86%E5%BC%80%E6%B5%8B"><span class="toc-text">2. 冷启动、热身和缓存命中分开测</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E4%B8%8D%E8%A6%81%E5%8F%AA%E7%9C%8B%E5%B9%B3%E5%9D%87%E5%80%BC"><span class="toc-text">3. 不要只看平均值</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E4%BA%94%E3%80%81%E5%87%A0%E4%B8%AA%E5%B8%B8%E8%A7%81%E8%AF%AF%E5%8C%BA"><span class="toc-text">五、几个常见误区</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%B8%80%EF%BC%9Amax-num-seqs-%E8%B6%8A%E5%A4%A7%E8%B6%8A%E5%A5%BD"><span class="toc-text">误区一：max-num-seqs 越大越好</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%BA%8C%EF%BC%9Agpu-memory-utilization-%E6%8B%89%E6%BB%A1%E6%9C%80%E5%88%92%E7%AE%97"><span class="toc-text">误区二：gpu-memory-utilization 拉满最划算</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E4%B8%89%EF%BC%9A%E7%AC%AC%E4%BA%8C%E6%AC%A1-Prefill-%E5%8F%98%E5%BF%AB%E5%B0%B1%E6%98%AF%E7%AE%97%E5%8A%9B%E6%8F%90%E5%8D%87"><span class="toc-text">误区三：第二次 Prefill 变快就是算力提升</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E8%AF%AF%E5%8C%BA%E5%9B%9B%EF%BC%9A%E5%8F%AA%E7%9C%8B%E5%90%9E%E5%90%90%EF%BC%8C%E4%B8%8D%E7%9C%8B%E6%88%90%E5%8A%9F%E7%8E%87"><span class="toc-text">误区四：只看吞吐，不看成功率</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E5%85%AD%E3%80%81%E7%BB%93%E8%AE%BA"><span class="toc-text">六、结论</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item"><a class="thumbnail" href="/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/" title="A3+Qwen3.8+vllm调参指南"><img src="/./img/aiguo.jpeg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="A3+Qwen3.8+vllm调参指南"/></a><div class="content"><a class="title" href="/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/" title="A3+Qwen3.8+vllm调参指南">A3+Qwen3.8+vllm调参指南</a><time datetime="2026-10-04T02:00:00.000Z" title="发表于 2026-10-04 10:00:00">2026-10-04</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/10/03/%E4%B8%BA%E4%BB%80%E4%B9%88%E7%AC%AC%E4%BA%8C%E6%AC%A1%E6%B5%8B%E8%AF%95%E7%9A%84prefill%E6%95%88%E6%9E%9C%E5%A5%BD%E8%BF%99%E4%B9%88%E5%A4%9A%EF%BC%9F/" title="为什么第二次测试的prefill效果好这么多？"><img src="/./img/aiguo.jpeg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="为什么第二次测试的prefill效果好这么多？"/></a><div class="content"><a class="title" href="/2026/10/03/%E4%B8%BA%E4%BB%80%E4%B9%88%E7%AC%AC%E4%BA%8C%E6%AC%A1%E6%B5%8B%E8%AF%95%E7%9A%84prefill%E6%95%88%E6%9E%9C%E5%A5%BD%E8%BF%99%E4%B9%88%E5%A4%9A%EF%BC%9F/" title="为什么第二次测试的prefill效果好这么多？">为什么第二次测试的prefill效果好这么多？</a><time datetime="2026-10-03T08:30:00.000Z" title="发表于 2026-10-03 16:30:00">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/10/03/python%E4%BB%8E%E5%85%A5%E9%97%A8%E5%88%B0%E7%B2%BE%E9%80%9A-%E6%A8%A1%E5%9D%97%E4%B8%80-%E5%9F%BA%E7%A1%80%E8%AE%A4%E7%9F%A5%E4%B8%8E%E6%A0%B8%E5%BF%83%E8%AF%AD%E6%B3%95/" title="Python 从入门到精通（一）：基础认知与核心语法"><img src="/./img/aiguo.jpeg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Python 从入门到精通（一）：基础认知与核心语法"/></a><div class="content"><a class="title" href="/2026/10/03/python%E4%BB%8E%E5%85%A5%E9%97%A8%E5%88%B0%E7%B2%BE%E9%80%9A-%E6%A8%A1%E5%9D%97%E4%B8%80-%E5%9F%BA%E7%A1%80%E8%AE%A4%E7%9F%A5%E4%B8%8E%E6%A0%B8%E5%BF%83%E8%AF%AD%E6%B3%95/" title="Python 从入门到精通（一）：基础认知与核心语法">Python 从入门到精通（一）：基础认知与核心语法</a><time datetime="2026-10-03T02:00:00.000Z" title="发表于 2026-10-03 10:00:00">2026-10-03</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/10/02/qwen3.8-27B%E9%87%8F%E5%8C%96%E6%A8%A1%E5%9E%8B%E7%94%A8ascend%E9%83%A8%E7%BD%B2%E5%AE%9E%E6%88%98%E5%85%A8%E6%B5%81%E7%A8%8B/" title="qwen3.8-27B量化模型用ascend部署实战全流程"><img src="/./img/aiguo.jpeg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="qwen3.8-27B量化模型用ascend部署实战全流程"/></a><div class="content"><a class="title" href="/2026/10/02/qwen3.8-27B%E9%87%8F%E5%8C%96%E6%A8%A1%E5%9E%8B%E7%94%A8ascend%E9%83%A8%E7%BD%B2%E5%AE%9E%E6%88%98%E5%85%A8%E6%B5%81%E7%A8%8B/" title="qwen3.8-27B量化模型用ascend部署实战全流程">qwen3.8-27B量化模型用ascend部署实战全流程</a><time datetime="2026-10-02T02:00:00.000Z" title="发表于 2026-10-02 10:00:00">2026-10-02</time></div></div><div class="aside-list-item"><a class="thumbnail" href="/2026/09/25/JEV%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F/" title="Jev到底是什么？"><img src="/./img/aiguo.jpeg" onerror="this.onerror=null;this.src='/img/404.jpg'" alt="Jev到底是什么？"/></a><div class="content"><a class="title" href="/2026/09/25/JEV%E5%88%B0%E5%BA%95%E6%98%AF%E4%BB%80%E4%B9%88%EF%BC%9F/" title="Jev到底是什么？">Jev到底是什么？</a><time datetime="2026-09-25T07:30:00.000Z" title="发表于 2026-09-25 15:30:00">2026-09-25</time></div></div></div></div></div></div></main><footer id="footer" style="background: transparent;"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By feynman</span></div><div class="footer_custom_text">have a nice day ！</div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><a id="to_comment" href="#post-comment" title="前往评论"><i class="fas fa-comments"></i></a><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js"></script><script src="/js/main.js"></script><script src="https://cdn.jsdelivr.net/npm/instant.page/instantpage.min.js" type="module"></script><div class="js-pjax"><script>(() => {
+  const isShuoshuo = GLOBAL_CONFIG_SITE.pageType === 'shuoshuo'
+  const option = null
+
+  const getCount = () => {
+    const countELement = document.getElementById('twikoo-count')
+    if(!countELement) return
+    twikoo.getCommentsCount({
+      envId: 'https://mytwikoo.midlight.top/',
+      region: '',
+      urls: [window.location.pathname],
+      includeReply: false
+    }).then(res => {
+      countELement.textContent = res[0].count
+    }).catch(err => {
+      console.error(err)
+    })
+  }
+
+  const init = (el = document, path = location.pathname) => {
+    twikoo.init({
+      el: el.querySelector('#twikoo-wrap'),
+      envId: 'https://mytwikoo.midlight.top/',
+      region: '',
+      onCommentLoaded: () => {
+        btf.loadLightbox(document.querySelectorAll('#twikoo .tk-content img:not(.tk-owo-emotion)'))
+      },
+      ...option,
+      path: isShuoshuo ? path : (option && option.path) || path
+    })
+
+    
+
+    isShuoshuo && (window.shuoshuoComment.destroyTwikoo = () => {
+      if (el.children.length) {
+        el.innerHTML = ''
+        el.classList.add('no-comment')
+      }
+    })
+  }
+
+  const loadTwikoo = (el, path) => {
+    if (typeof twikoo === 'object') setTimeout(() => init(el, path), 0)
+    else btf.getScript('https://cdn.jsdelivr.net/npm/twikoo/dist/twikoo.all.min.js').then(() => init(el, path))
+  }
+
+  if (isShuoshuo) {
+    'Twikoo' === 'Twikoo'
+      ? window.shuoshuoComment = { loadComment: loadTwikoo }
+      : window.loadOtherComment = loadTwikoo
+    return
+  }
+
+  if ('Twikoo' === 'Twikoo' || !true) {
+    if (true) btf.loadComment(document.getElementById('twikoo-wrap'), loadTwikoo)
+    else loadTwikoo()
+  } else {
+    window.loadOtherComment = loadTwikoo
+  }
+})()</script></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/aplayer/dist/APlayer.min.js"></script><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc/metingjs/dist/Meting.min.js"></script><script>(() => {
+  const destroyAplayer = () => {
+    if (window.aplayers) {
+      for (let i = 0; i < window.aplayers.length; i++) {
+        if (!window.aplayers[i].options.fixed) {
+          window.aplayers[i].destroy()
+        }
+      }
+    }
+  }
+
+  const runMetingJS = () => {
+    typeof loadMeting === 'function' && document.getElementsByClassName('aplayer').length && loadMeting()
+  }
+
+  btf.addGlobalFn('pjaxSend', destroyAplayer, 'destroyAplayer')
+  btf.addGlobalFn('pjaxComplete', loadMeting, 'runMetingJS')
+})()</script><script src="https://cdn.jsdelivr.net/npm/pjax/pjax.min.js"></script><script>(() => {
+  const pjaxSelectors = ["head > title","#config-diff","#body-wrap","#rightside-config-hide","#rightside-config-show",".js-pjax"]
+
+  window.pjax = new Pjax({
+    elements: 'a:not([target="_blank"])',
+    selectors: pjaxSelectors,
+    cacheBust: false,
+    analytics: false,
+    scrollRestoration: false
+  })
+
+  const triggerPjaxFn = (val) => {
+    if (!val) return
+    Object.values(val).forEach(fn => fn())
+  }
+
+  document.addEventListener('pjax:send', () => {
+    // removeEventListener
+    btf.removeGlobalFnEvent('pjaxSendOnce')
+    btf.removeGlobalFnEvent('themeChange')
+
+    // reset readmode
+    const $bodyClassList = document.body.classList
+    if ($bodyClassList.contains('read-mode')) $bodyClassList.remove('read-mode')
+
+    triggerPjaxFn(window.globalFn.pjaxSend)
+  })
+
+  document.addEventListener('pjax:complete', () => {
+    btf.removeGlobalFnEvent('pjaxCompleteOnce')
+    document.querySelectorAll('script[data-pjax]').forEach(item => {
+      const newScript = document.createElement('script')
+      const content = item.text || item.textContent || item.innerHTML || ""
+      Array.from(item.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value))
+      newScript.appendChild(document.createTextNode(content))
+      item.parentNode.replaceChild(newScript, item)
+    })
+
+    triggerPjaxFn(window.globalFn.pjaxComplete)
+  })
+
+  document.addEventListener('pjax:error', e => {
+    if (e.request.status === 404) {
+      const usePjax = true
+      true
+        ? (usePjax ? pjax.loadUrl('/404.html') : window.location.href = '/404.html')
+        : window.location.href = e.request.responseURL
+    }
+  })
+})()</script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script><div id="local-search"><div class="search-dialog"><nav class="search-nav"><span class="search-dialog-title">搜索</span><span id="loading-status"></span><button class="search-close-button"><i class="fas fa-times"></i></button></nav><div class="text-center" id="loading-database"><i class="fas fa-spinner fa-pulse"></i><span>  数据加载中</span></div><div class="search-wrap"><div id="local-search-input"><div class="local-search-box"><input class="local-search-box--input" placeholder="搜索文章" type="text"/></div></div><hr/><div id="local-search-results"></div><div id="local-search-stats-wrap"></div></div></div><div id="search-mask"></div><script src="/js/search/local-search.js"></script></div></div></body></html>
