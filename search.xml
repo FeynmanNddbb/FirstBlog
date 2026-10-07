@@ -4,6 +4,37 @@
   
     
     <entry>
+      <title>vLLM和SGLang谁抄的谁？</title>
+      <link href="/2026/10/07/vllm%E5%92%8Csglang%E8%B0%81%E6%8A%84%E7%9A%84%E8%B0%81%EF%BC%9F/"/>
+      <url>/2026/10/07/vllm%E5%92%8Csglang%E8%B0%81%E6%8A%84%E7%9A%84%E8%B0%81%EF%BC%9F/</url>
+      
+        <content type="html"><![CDATA[<h2 id="先说结论：没有谁抄谁"><a href="#先说结论：没有谁抄谁" class="headerlink" title="先说结论：没有谁抄谁"></a>先说结论：没有谁抄谁</h2><p>把vLLM和SGLang放在一起比较时，最容易出现的提问就是：“到底是谁抄了谁？”</p><p>我的结论是：**这里没有一个适合直接套用的“抄袭”结论。**两个框架解决的问题和面对的瓶颈本来就高度重合，大方向自然会越来越接近；真正不同的地方，更多在实现细节、系统边界和应用场景。</p><p>大模型Serving并不是凭空设计出来的产品功能，而是在一组非常具体的物理约束下不断优化：GPU显存有限，请求长度动态变化，Decode阶段要逐Token生成，线上流量又会不断变化。只要目标都是提高吞吐、降低延迟、提高显存利用率，很多工程选择就会收敛到相似的形状。</p><p>所以，看到两个项目都实现了Continuous Batching、KV Cache、Prefix Caching、Speculative Decoding，首先应该想到的是“这些能力已经成为现代高性能LLM Serving的主流工程模式”，而不是只看类名或命令行参数猜谁复制了谁。</p><h2 id="为什么vLLM和SGLang很像？"><a href="#为什么vLLM和SGLang很像？" class="headerlink" title="为什么vLLM和SGLang很像？"></a>为什么vLLM和SGLang很像？</h2><p>两套成熟的LLM Serving Engine面对的是同一组问题：GPU显存是有限资源，请求会随时进入和退出队列，Prefill和Decode的计算特征不同，而且模型越来越大，单卡放不下就必须做分布式并行。</p><p>这会带来一条相似的优化路线：先做动态请求批处理，再把KV Cache从普通张量管理提升为专门的内存系统；接着复用相同前缀，减少重复Prefill；最后再处理投机解码、分布式并行和Prefill&#x2F;Decode资源分离。</p><p>可以把它们的能力大致对照成下面这样：</p><table><thead><tr><th>共同问题</th><th>vLLM方案</th><th>SGLang方案</th></tr></thead><tbody><tr><td>动态请求批处理</td><td>Continuous Batching &#x2F; Scheduler</td><td>Continuous Batching &#x2F; Scheduler</td></tr><tr><td>KV显存管理</td><td>Paged KV Cache</td><td>KV Cache Pool</td></tr><tr><td>相同前缀避免重算</td><td>Prefix Caching</td><td>RadixAttention &#x2F; Radix Cache</td></tr><tr><td>一次多生成Token</td><td>Speculative Decoding</td><td>Speculative Decoding</td></tr><tr><td>大模型分卡</td><td>TP &#x2F; PP &#x2F; DP &#x2F; EP &#x2F; CP等并行方式</td><td>TP &#x2F; PP &#x2F; DP &#x2F; EP &#x2F; CP等并行方式</td></tr><tr><td>Prefill和Decode资源分离</td><td>Disaggregated Prefill&#x2F;Decode</td><td>PD Disaggregation</td></tr></tbody></table><p>这里的重点不是说两边的代码完全相同，而是说它们在系统层面都需要回答类似的问题：请求下一步执行多少Token？哪些KV可以复用？显存块从哪里分配？哪个设备执行哪一部分计算？</p><p>证据可以直接看两个项目在相应版本的README，而不是只看几年前的博客或二手文章：</p><ul><li><a href="https://github.com/vllm-project/vllm/tree/58b3298457dde7b4554b3b4e20b238c0ac2c3a65">vLLM README.md，提交58b3298457dde7b4554b3b4e20b238c0ac2c3a65</a></li><li><a href="https://github.com/sgl-project/sglang/tree/fcb080bd4007d88c76fd901a07248066b460684a">SGLang README.md，提交fcb080bd4007d88c76fd901a07248066b460684a</a></li></ul><p>这类版本锚点很重要。两个项目迭代都很快，如果只根据旧博客比较，很容易把过去的实现方式误认为当前版本的能力边界。</p><h2 id="共同问题：Scheduler和KV-Cache是核心"><a href="#共同问题：Scheduler和KV-Cache是核心" class="headerlink" title="共同问题：Scheduler和KV Cache是核心"></a>共同问题：Scheduler和KV Cache是核心</h2><h3 id="动态请求批处理"><a href="#动态请求批处理" class="headerlink" title="动态请求批处理"></a>动态请求批处理</h3><p>线上请求不会整齐地同时到达，也不会在同一个时间结束。一个请求可能还在Prefill，另一个请求已经进入Decode，第三个请求刚刚排队。如果每个请求都独占一次完整的模型执行，GPU很快就会出现空洞，吞吐也会明显下降。</p><p>Continuous Batching的思路是：每一轮调度都重新决定参与计算的请求和Token数量。完成的请求退出，新的请求加入，正在生成的请求继续拿到少量Decode预算。Scheduler的职责，就是在延迟、吞吐、显存和公平性之间做这个决定。</p><h3 id="KV显存管理"><a href="#KV显存管理" class="headerlink" title="KV显存管理"></a>KV显存管理</h3><p>Decode每生成一个Token，都要读取历史Token对应的Key和Value。如果KV Cache按照连续大块内存保存，请求长度变化和请求退出会带来严重的碎片问题，也很难动态扩容。</p><p>因此，vLLM会把KV Cache拆成可管理的Paged KV Cache块；SGLang则通过KV Cache Pool等方式管理可复用的缓存空间。实现名不同，但背后的抽象很接近：把KV Cache从“模型临时产生的一块张量”变成“由调度器和内存管理器共同维护的资源”。</p><h3 id="相同前缀避免重算"><a href="#相同前缀避免重算" class="headerlink" title="相同前缀避免重算"></a>相同前缀避免重算</h3><p>很多请求共享系统提示词、工具定义、文档前缀或对话历史。如果每次都从第一个Token开始做Prefill，计算会被重复浪费。</p><p>vLLM提供Prefix Caching，SGLang使用RadixAttention和Radix Cache组织前缀。Radix Tree更适合表达不同请求之间的公共前缀，Paged KV Cache更强调块式内存管理。二者的具体数据结构和命中逻辑可以不同，但目标都是复用已有KV，减少重复计算和首Token等待时间。</p><h2 id="两套方案的差别在哪里？"><a href="#两套方案的差别在哪里？" class="headerlink" title="两套方案的差别在哪里？"></a>两套方案的差别在哪里？</h2><p>不能因为能力列表相似，就把vLLM和SGLang当成同一个项目。差异往往藏在“系统怎样组织这些能力”里面。</p><p>vLLM给人的整体印象是通用、高性能的模型推理服务引擎，核心执行链路围绕请求、调度、KV Cache和GPU执行展开。它适合把模型包装成稳定的OpenAI兼容服务，再通过并发、批处理、量化和并行配置逐步调优。</p><p>SGLang除了提供Serving能力，也很强调结构化生成和程序化调用场景。它的运行时会围绕Radix Cache等机制组织共享前缀，对多轮对话、Agent、工具调用和具有重复结构的请求尤其有吸引力。</p><p>这不是简单的优劣排名。对于一个普通文本生成API，两者都可能满足需求；对于大量共享Prompt前缀的工作负载，应该重点看前缀缓存命中率和调度行为；对于复杂结构化生成，则要看框架对请求编排、约束生成和模型适配的支持。最终选择应该由模型、硬件、并发模式和业务请求形态决定，而不是由“谁更像谁”决定。</p><p>另外，Speculative Decoding、TP&#x2F;PP&#x2F;DP&#x2F;EP&#x2F;CP以及Prefill&#x2F;Decode分离，也不是某个项目独有的概念。它们分别对应生成速度、模型切分、专家并行、上下文处理和资源隔离等问题。只要规模继续增大，这些问题就会持续出现，解决方案相互借鉴和逐渐收敛是很自然的结果。</p><h2 id="第一次读vLLM源码，先看这5个入口"><a href="#第一次读vLLM源码，先看这5个入口" class="headerlink" title="第一次读vLLM源码，先看这5个入口"></a>第一次读vLLM源码，先看这5个入口</h2><p>如果第一次读vLLM源码，不建议一上来就扎进CUDA Kernel。Kernel当然重要，但它通常只解释“某个局部计算怎么更快”，很难先回答“一个请求是怎么走完整条链路的”。更合适的阅读顺序是：<strong>Engine→Scheduler→KV→ModelRunner</strong>。</p><p>下面这套入口统一锁定在提交<code>58b3298457dde7b4554b3b4e20b238c0ac2c3a65</code>，先确认版本，再开始读代码：</p><ol><li><a href="https://github.com/vllm-project/vllm/blob/58b3298457dde7b4554b3b4e20b238c0ac2c3a65/vllm/v1/engine/core.py"><code>vllm/v1/engine/core.py</code></a>：看<code>class EngineCore</code>，理解请求生命周期、消息处理和Engine主循环。</li><li><a href="https://github.com/vllm-project/vllm/blob/58b3298457dde7b4554b3b4e20b238c0ac2c3a65/vllm/v1/core/sched/scheduler.py"><code>vllm/v1/core/sched/scheduler.py</code></a>：看<code>class Scheduler</code>，理解Waiting和Running请求如何变成下一步Token Budget。</li><li><a href="https://github.com/vllm-project/vllm/blob/58b3298457dde7b4554b3b4e20b238c0ac2c3a65/vllm/v1/core/kv_cache_manager.py"><code>vllm/v1/core/kv_cache_manager.py</code></a>：看<code>class KVCacheManager</code>，理解Block分配、Prefix Cache和KV资源管理。</li><li><a href="https://github.com/vllm-project/vllm/blob/58b3298457dde7b4554b3b4e20b238c0ac2c3a65/vllm/v1/worker/gpu_model_runner.py"><code>vllm/v1/worker/gpu_model_runner.py</code></a>：看<code>class GPUModelRunner</code>，理解Scheduler Output最后如何变成真实的GPU Execution。</li><li>README中的Serving能力列表：把源码里看到的类和实际对外承诺对应起来，避免拿旧版本的实现印象去解释当前代码。</li></ol><p>阅读时可以一直追踪一个简单的问题：一次请求从进入Engine开始，什么时候进入Waiting，什么时候被Scheduler选中，KV块何时分配，最后又如何交给ModelRunner执行。这个问题串起来以后，再回头看Prefix Cache、Speculative Decoding或者分布式并行，就不会只剩下零散的类名。</p><h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>vLLM和SGLang都在解决现代LLM Serving的共同物理问题：有限的GPU显存、动态请求、逐Token Decode、重复前缀和多卡执行。</p><p>相同的不是类名，而是系统抽象。Continuous Batching、KV Cache管理、Prefix Caching、Speculative Decoding和Prefill&#x2F;Decode分离，已经逐渐成为高性能LLM Serving的主流工程模式和行业共识。</p><p>所以，这两个框架更值得比较的是：同一个抽象下，谁的实现更适合当前模型、硬件和业务流量。先把共同问题看懂，再看各自的工程取舍，通常比争论“谁抄的谁”更接近技术事实。</p>]]></content>
+      
+      
+      <categories>
+          
+          <category> 人工智能 </category>
+          
+      </categories>
+      
+      
+        <tags>
+            
+            <tag> vLLM </tag>
+            
+            <tag> SGLang </tag>
+            
+            <tag> 大模型推理 </tag>
+            
+            <tag> LLM Serving </tag>
+            
+        </tags>
+      
+    </entry>
+    
+    
+    
+    <entry>
       <title>A3+Qwen3.8+vllm调参指南</title>
       <link href="/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/"/>
       <url>/2026/10/04/%E5%A4%A7%E6%A8%A1%E5%9E%8B%E8%B0%83%E5%8F%82%E6%8C%87%E5%8D%97/</url>
@@ -109,9 +140,9 @@
       
         <tags>
             
-            <tag> 模型部署 </tag>
-            
             <tag> Qwen </tag>
+            
+            <tag> 模型部署 </tag>
             
         </tags>
       
@@ -155,6 +186,8 @@
       
         <tags>
             
+            <tag> 模型部署 </tag>
+            
             <tag> vLLM </tag>
             
             <tag> 大语言模型 </tag>
@@ -170,8 +203,6 @@
             <tag> Qwen3.5 </tag>
             
             <tag> RTX 4060 </tag>
-            
-            <tag> 模型部署 </tag>
             
         </tags>
       
@@ -190,13 +221,13 @@
       
         <tags>
             
-            <tag> 大语言模型 </tag>
+            <tag> Qwen </tag>
             
             <tag> 模型部署 </tag>
             
-            <tag> AI </tag>
+            <tag> 大语言模型 </tag>
             
-            <tag> Qwen </tag>
+            <tag> AI </tag>
             
             <tag> DeepSeek </tag>
             
@@ -402,7 +433,7 @@
       <link href="/2026/03/06/%E6%9C%8B%E5%8F%8B%E7%95%99%E8%A8%80%E9%A1%B5/"/>
       <url>/2026/03/06/%E6%9C%8B%E5%8F%8B%E7%95%99%E8%A8%80%E9%A1%B5/</url>
       
-        <content type="html"><![CDATA[<h2 id="欢迎留言！"><a href="#欢迎留言！" class="headerlink" title="欢迎留言！"></a>欢迎留言！</h2><p>这是一个朋友们可以互动交流的留言页面。欢迎在下方评论区分享你的想法、建议或问候～</p><h3 id="📝-留言指南"><a href="#📝-留言指南" class="headerlink" title="📝 留言指南"></a>📝 留言指南</h3><ul><li>保持言论文明、健康、积极向上</li><li>欢迎分享你的有趣故事或观点</li><li>可以互相交流、鼓励和支持</li><li>我会尽量回复每一条留言</li></ul><h3 id="💬-与我联系"><a href="#💬-与我联系" class="headerlink" title="💬 与我联系"></a>💬 与我联系</h3><p>如果你想更直接地和我沟通，也可以通过以下方式：</p><ul><li><strong>邮箱：</strong> <a href="mailto:&#x33;&#53;&#53;&#x33;&#x33;&#48;&#x33;&#x33;&#49;&#x35;&#64;&#113;&#x71;&#46;&#x63;&#111;&#109;">3553303315@qq.com</a></li><li><strong>微信&#x2F;QQ：</strong> 见页面右下角社交媒体链接</li></ul><p>期待你的留言！✨</p>]]></content>
+        <content type="html"><![CDATA[<h2 id="欢迎留言！"><a href="#欢迎留言！" class="headerlink" title="欢迎留言！"></a>欢迎留言！</h2><p>这是一个朋友们可以互动交流的留言页面。欢迎在下方评论区分享你的想法、建议或问候～</p><h3 id="📝-留言指南"><a href="#📝-留言指南" class="headerlink" title="📝 留言指南"></a>📝 留言指南</h3><ul><li>保持言论文明、健康、积极向上</li><li>欢迎分享你的有趣故事或观点</li><li>可以互相交流、鼓励和支持</li><li>我会尽量回复每一条留言</li></ul><h3 id="💬-与我联系"><a href="#💬-与我联系" class="headerlink" title="💬 与我联系"></a>💬 与我联系</h3><p>如果你想更直接地和我沟通，也可以通过以下方式：</p><ul><li><strong>邮箱：</strong> <a href="mailto:&#51;&#53;&#53;&#51;&#51;&#48;&#51;&#x33;&#x31;&#53;&#64;&#113;&#113;&#46;&#x63;&#x6f;&#109;">3553303315@qq.com</a></li><li><strong>微信&#x2F;QQ：</strong> 见页面右下角社交媒体链接</li></ul><p>期待你的留言！✨</p>]]></content>
       
       
       
@@ -561,11 +592,11 @@
       
         <tags>
             
+            <tag> 能源 </tag>
+            
             <tag> 焦化 </tag>
             
             <tag> 钢铁 </tag>
-            
-            <tag> 能源 </tag>
             
             <tag> 工业 </tag>
             
