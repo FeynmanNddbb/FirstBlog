@@ -1,0 +1,4 @@
+- name: 我的音乐列表
+  server: netease # 音乐服务器：netease, tencent, kugou, xiami, baidu
+  type: playlist # 类型：song, playlist, album, search, artist
+  id: 18446707288 # 音乐ID或播放列表ID

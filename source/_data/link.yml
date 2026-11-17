@@ -1,0 +1,19 @@
+- class_name: feynman的好朋友们
+  link_list:
+    - name: 武汉科技大学研究生院
+      link: https://ysxy.wust.edu.cn/
+      descr: 华中知名学府官网
+
+
+- class_name: 网站
+  class_desc: 值得推荐的网站
+  link_list:
+    - name: butterfly
+      link: https://butterfly.js.org/
+      avatar: https://butterfly.js.org/img/butterfly-icon.png
+      descr: butterfly主題官方教程
+
+    - name: CAS号查询
+      link: https://www.chemicalbook.com/CASDetailList_0.htm
+      avatar: fa-solid fa-mug-hot
+      descr: 常见化学品CAS号列表
